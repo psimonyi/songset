@@ -1,0 +1,13 @@
+[package]
+name = "songset"
+version = "0.1.0"
+authors = ["Peter Simonyi <pts@petersimonyi.ca>"]
+
+[dependencies]
+pest = "1.0.0-beta.16"
+pest_derive = "1.0.0-beta.16"
+pango = "0.3.0"
+
+[dependencies.gtk]
+version = "0.3.0"
+features = ["v3_22"]
