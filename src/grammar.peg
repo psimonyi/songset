@@ -1,0 +1,45 @@
+use super::{Line, Sexp, Item};
+
+pub song -> Vec<Vec<Line<'input>>> =
+    s: block ++ blanks nl* { s }
+
+block -> Vec<Line<'input>>
+    = line ++ nl
+
+line -> Line<'input>
+    = indent:indent items:item+ { Line { indent, items } }
+
+indent -> &'input str
+    = $(lws*)
+
+item -> Item<'input>
+    = t: text {Item::Text(t)}
+    / s: sexp {Item::Sexp(s)}
+
+sexp -> Sexp<'input>
+    = lparen1 s:sexp_body rparen1 { s }
+    / lparen2 s:sexp_body rparen2 { s }
+
+sexp_body -> Sexp<'input>
+    = k:keyword lws+ i:item+ { Sexp { keyword: k, items: i } }
+    / k:keyword { Sexp { keyword: k, items: Vec::new() } }
+
+text -> &'input str
+    = $(plain+)
+
+keyword -> &'input str
+    = $((!" " plain)+)
+
+// Plain text characters: nothing we treat specially or want to forbid (\t)
+plain
+    = !lparen1 !lparen2 !rparen1 !rparen2 !nl [^\t]
+
+// At least two newlines = at least one blank
+blanks = nl nl+
+
+lparen1 = "[["
+rparen1 = "]]"
+lparen2 = "⟦" // U+27E6 MATHEMATICAL LEFT WHITE SQUARE BRACKET
+rparen2 = "⟧" // U+27E7 MATHEMATICAL RIGHT WHITE SQUARE BRACKET
+lws = " "
+nl = "\n"
