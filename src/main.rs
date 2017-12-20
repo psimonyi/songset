@@ -170,10 +170,17 @@ fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
         "title" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
         "alt-title" => Ok(Metadata::AltTitle(tr_formatted_text(&sexp.items)?)),
         "attrib" => Ok(Metadata::Attrib(tr_formatted_text(&sexp.items)?)),
-        "xref" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
+        "ref" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
+
+        // To be translated
+        "white-book" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
+        "white-book-title" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
+        "author" => Ok(Metadata::Attrib(tr_formatted_text(&sexp.items)?)),
+
         "category" => Ok(Metadata::Category(sexp.string_item()?.into())),
         "index" => Ok(Metadata::IndexEntry(sexp.string_item()?.into())),
         "lang" => Ok(Metadata::Language(sexp.string_item()?.into())),
+        "dance" => Ok(Metadata::Dance(sexp.string_item()?.into())),
         "descant" => {
             if sexp.has_args() {
                 return Err(Error::new(format!(
@@ -183,7 +190,15 @@ fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
         },
         "numbered-verses" => Ok(Metadata::Ignored),
         "todo" => Ok(Metadata::Ignored),
+        "TODO" => Ok(Metadata::Ignored),
+        "TODO-special-formatting" => Ok(Metadata::Ignored),
+        "note" => Ok(Metadata::Ignored),
+        "ignore-this-file" => Ok(Metadata::Ignored),
         "inline-chorus-markers" => Ok(Metadata::Ignored),
+        "inline-chorus" => Ok(Metadata::Ignored),
+        "white-book-note" => Ok(Metadata::Ignored),
+        "origin" => Ok(Metadata::Ignored),
+        "source" => Ok(Metadata::Ignored),
         k => Err(Error::new(format!("Unrecognized meta keyword {:?}", k))),
     }
 }
@@ -206,6 +221,8 @@ enum Metadata {
     Category(String),
     /// Additional phrases under which to index this song.
     IndexEntry(String),
+    /// A type of dance this song may be suitable for.
+    Dance(String),
     Ignored,
 }
 
@@ -277,7 +294,8 @@ fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText)
     for item in src {
         match *item {
             Item::Text(ref s) => ft.text.push_str(s),
-            Item::Sexp(Sexp{keyword: "italic", ref items}) => {
+            Item::Sexp(Sexp{keyword: "italic", ref items}) |
+            Item::Sexp(Sexp{keyword: "note", ref items}) => {
                 // When would new_style ever return None???
                 let mut attr = pango::Attribute::new_style(pango::Style::Italic).unwrap();
                 attr.set_start_index(ft.text.len() as u32);
@@ -285,67 +303,24 @@ fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText)
                 attr.set_end_index(ft.text.len() as u32);
                 ft.formatting.change(attr);
             },
-            ref x => return Err(Error::new(format!("bad item {:?}", x))),
+            Item::Sexp(Sexp{keyword: "footnote", ref items}) => {
+                // When would new_style ever return None???
+                let mut attr = pango::Attribute::new_style(pango::Style::Italic).unwrap();
+                attr.set_start_index(ft.text.len() as u32);
+                add_formatted_text(items, ft)?;
+                attr.set_end_index(ft.text.len() as u32);
+                ft.formatting.change(attr);
+            },
+            Item::Sexp(ref s @ Sexp{keyword: "...", ..}) => {
+                if !s.items.is_empty() {
+                    return Err(Error::new(format!(
+                        "⟦... {:?}⟧ should have no arguments", s.items)));
+                }
+                ft.text.push_str("…");
+            },
+            Item::Sexp(ref sexp) => return Err(Error::new(format!(
+                "Unrecognized formatting command '{}'", sexp))),
         }
     }
     Ok(())
 }
-
-/*
-author - should just use attrib
-dance - i marked a few waltzes
-origin - english, irish, etc
-source - where I got the words (lark in the crear air)
-white-book - translate to CrossRef
-white-book-title - translate to AltTitle
-}
-*/
-//
-// Recognized sexp keywords:
-/*
-Text formatting
-===============
-...  replace with ellipsis
-footnote
-italic
-math
-
-Verse info
-==========
-Chorus
-Chorus:
-Refrain:
-refrain
-verse-label
-section-break
-
-Metadata
-========
-alt-title
-attrib
-author
-category
-dance
-descant  means it has a descant
-index
-lang
-origin
-ref
-source
-title
-white-book
-white-book-note
-white-book-title
-
-Misc
-====
-ignore-this-file
-inline-chorus
-inline-chorus-markers
-note
-numbered-verses
-TODO
-todo
-TODO-special-formatting
-
-*/
