@@ -18,10 +18,11 @@ fn main() {
         let mut file = fs::File::open(path).unwrap();
         let mut s = String::new();
         file.read_to_string(&mut s).unwrap();
-        let parsed = parse::song(&s).unwrap();
-        let song = tr_song(&parsed);
-
-        println!("{:?}", song);
+        let parsed = parse::song(&s);
+        match parsed {
+            Ok(x) => println!("{:?}", tr_song(&x)),
+            Err(e) => println!("Parse error: {}", e),
+        }
     }
 }
 
@@ -37,6 +38,23 @@ pub struct Line<'a> {
 struct Sexp<'a> {
     keyword: &'a str,
     items: Vec<Item<'a>>,
+}
+
+impl<'a> Sexp<'a> {
+    fn string_item(&self) -> Result<&'a str, String> {
+        if self.items.len() == 1 {
+            match self.items[0] {
+                Item::Text(s) => Ok(s),
+                _ => Err(format!("Expected string argument in {:?}", self)),
+            }
+        } else {
+            Err(format!("Exactly one argument required in {:?}", self))
+        }
+    }
+
+    fn has_args(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 #[derive(Debug)]
@@ -78,12 +96,90 @@ impl std::fmt::Debug for FormattedText {
 }
 
 #[derive(Debug)]
+struct Error (String);
+
+impl Error {
+    fn new<S: Into<String>>(message: S) -> Self {
+        Error(message.into())
+    }
+}
+
+impl std::error::Error for Error {
+    fn description(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<S: Into<String>> std::convert::From<S> for Error {
+    fn from(message: S) -> Error {
+        Error(message.into())
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+        write!(f, "Translation error: {}", self.0)
+    }
+}
+
+fn tr_song(src: &Vec<Vec<Line>>) -> Result<Song, Error> {
+    let mut i = src.iter();
+    let meta = tr_meta_block(i.next().unwrap())?;
+    let verses = i.map(tr_verse).collect::<Result<_, _>>()?;
+
+    Ok(Song { meta, verses })
+}
+
+fn tr_meta_block(src: &Vec<Line>) -> Result<Vec<Metadata>, Error> {
+    src.iter()
+        .flat_map(|l| &l.items)
+        .filter_map(|item| {
+            match *item {
+                Item::Text(ref s) if str_is_whitespace(s) =>
+                    None,
+                Item::Text(ref s) =>
+                    Some(Err(Error::new(
+                        format!("Text in the meta block: {:?}", s)))),
+                Item::Sexp(ref sexp) =>
+                    Some(tr_meta_entry(sexp)),
+            }
+        })
+        .collect()
+}
+
+fn str_is_whitespace(s: &str) -> bool {
+    s.chars().all(char::is_whitespace)
+}
+
+fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
+    match sexp.keyword {
+        "title" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
+        "alt-title" => Ok(Metadata::AltTitle(tr_formatted_text(&sexp.items)?)),
+        "attrib" => Ok(Metadata::Attrib(tr_formatted_text(&sexp.items)?)),
+        "xref" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
+        "category" => Ok(Metadata::Category(sexp.string_item()?.into())),
+        "index" => Ok(Metadata::IndexEntry(sexp.string_item()?.into())),
+        "lang" => Ok(Metadata::Language(sexp.string_item()?.into())),
+        "descant" => {
+            if sexp.has_args() {
+                return Err(Error::new(format!(
+                    "⟦descant⟧ takes no arguments: {:?}", sexp)));
+            }
+            Ok(Metadata::Descant)
+        },
+        "numbered-verses" => Ok(Metadata::Ignored),
+        "todo" => Ok(Metadata::Ignored),
+        "inline-chorus-markers" => Ok(Metadata::Ignored),
+        k => Err(Error::new(format!("Unrecognized meta keyword {:?}", k))),
+    }
+}
+
+#[derive(Debug)]
 enum Metadata {
     /// The primary title of the song.
     Title(FormattedText),
     /// An alternative title.
     AltTitle(FormattedText),
-    /*
     /// RFC5646 language tag: the language of the text.
     Language(String),
     /// Reference to another book containing the song.
@@ -96,46 +192,11 @@ enum Metadata {
     Category(String),
     /// Additional phrases under which to index this song.
     IndexEntry(String),
-    */
-    Unknown,
+    Ignored,
 }
 
-fn tr_song(src: &Vec<Vec<Line>>) -> Result<Song, Error> {
-    let mut i = src.iter();
-    let meta = tr_meta_block(i.next().unwrap());
-    let verses = i.filter_map(tr_verse).collect();
 
-    Song { meta, verses }
-}
-
-fn tr_meta_block(src: &Vec<Line>) -> Vec<Metadata> {
-    src.iter().flat_map(|l| &l.items).filter_map(|item| {
-        match *item {
-            Item::Text(s) => {
-                assert!(str_is_whitespace(s));
-                None
-            },
-            Item::Sexp(ref sexp) => {
-                Some(tr_meta_entry(sexp))
-            },
-        }
-    }).collect()
-}
-
-fn str_is_whitespace(s: &str) -> bool {
-    s.chars().all(char::is_whitespace)
-}
-
-fn tr_meta_entry(sexp: &Sexp) -> Metadata {
-    match sexp.keyword {
-        "title" => Metadata::Title(tr_formatted_text(&sexp.items)),
-        "alt-title" => Metadata::AltTitle(tr_formatted_text(&sexp.items)),
-        _ => Metadata::Unknown,
-        //_ => panic!("Unrecognized keyword"),
-    }
-}
-
-fn tr_verse(src: &Vec<Line>) -> Option<Verse> {
+fn tr_verse(src: &Vec<Line>) -> Result<Verse, Error> {
     let mut i = src.iter().peekable();
     let style = {
         let line = i.peek().unwrap(); // It's the first; there must be one.
@@ -146,8 +207,8 @@ fn tr_verse(src: &Vec<Line>) -> Option<Verse> {
         i.next();
     }
 
-    let lines = i.map(tr_line).collect();
-    Some(Verse {
+    let lines = i.map(tr_line).collect::<Result<_,_>>()?;
+    Ok(Verse {
         lines,
         style: style.unwrap_or(VerseType::Normal),
     })
@@ -183,21 +244,22 @@ fn tr_verse_meta(line: &Line) -> Option<VerseType> {
     rv
 }
 
-fn tr_line(src: &Line) -> FormattedText {
+fn tr_line(src: &Line) -> Result<FormattedText, Error> {
     tr_formatted_text(&src.items)
 }
 
-fn tr_formatted_text(src: &Vec<Item>) -> FormattedText {
+fn tr_formatted_text(src: &Vec<Item>) -> Result<FormattedText, Error> {
     let mut ft = FormattedText {
         text: String::new(),
         formatting: pango::AttrList::new(),
         indent: 0,
     };
-    add_formatted_text(src, &mut ft);
-    ft
+    add_formatted_text(src, &mut ft)?;
+    Ok(ft)
 }
 
-fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText) {
+fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText)
+-> Result<(), Error> {
     for item in src {
         match *item {
             Item::Text(ref s) => ft.text.push_str(s),
@@ -205,13 +267,14 @@ fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText) {
                 // When would new_style ever return None???
                 let mut attr = pango::Attribute::new_style(pango::Style::Italic).unwrap();
                 attr.set_start_index(ft.text.len() as u32);
-                add_formatted_text(items, ft);
+                add_formatted_text(items, ft)?;
                 attr.set_end_index(ft.text.len() as u32);
                 ft.formatting.change(attr);
             },
-            ref x => panic!("bad item {:?}", x),
+            ref x => return Err(Error::new(format!("bad item {:?}", x))),
         }
     }
+    Ok(())
 }
 
 /*

@@ -32,7 +32,8 @@ keyword -> &'input str
 
 // Plain text characters: nothing we treat specially or want to forbid (\t)
 plain
-    = !lparen1 !lparen2 !rparen1 !rparen2 !nl [^\t]
+    = #quiet<!lparen1 !lparen2 !rparen1 !rparen2 !nl [^\t]>
+    / #expected("plain text")
 
 // At least two newlines = at least one blank
 blanks = nl nl+
