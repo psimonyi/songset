@@ -96,6 +96,7 @@ enum VerseType {
     Normal,
     Refrain(String), // e.g. "Chorus:"
     ChorusInstance(String), // e.g. "Chorus"
+    SectionBreak(String), // e.g. alt language or another poem to the same tune
 }
 
 struct FormattedText {
@@ -246,6 +247,8 @@ fn tr_verse(src: &Vec<Line>) -> Result<Verse, Error> {
 }
 
 fn tr_verse_meta(line: &Line) -> Option<VerseType> {
+    // For ChorusInstance and SectionBreak we should also check that the rest
+    // of the verse is empty...
     let mut rv = None;
     for item in &line.items {
         match *item {
@@ -266,6 +269,16 @@ fn tr_verse_meta(line: &Line) -> Option<VerseType> {
                     Sexp { keyword: "Chorus", ref items }
                     if items.is_empty() => {
                         rv = Some(VerseType::ChorusInstance(String::from("Chorus")));
+                    },
+                    Sexp { keyword: "refrain", .. } => {
+                        rv = sexp.string_item().ok()
+                            .map(String::from)
+                            .map(VerseType::ChorusInstance);
+                    },
+                    Sexp { keyword: "section-break", .. } => {
+                        rv = sexp.string_item().ok()
+                            .map(String::from)
+                            .map(VerseType::SectionBreak);
                     },
                     _ => return None,
                 }
