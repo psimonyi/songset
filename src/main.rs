@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -20,7 +21,10 @@ fn main() {
         file.read_to_string(&mut s).unwrap();
         let parsed = parse::song(&s);
         match parsed {
-            Ok(x) => println!("{:?}", tr_song(&x)),
+            Ok(x) => match tr_song(&x) {
+                Ok(_) => (),
+                Err(e) => println!("Error: {:?}", e),
+            },
             Err(e) => println!("Parse error: {}", e),
         }
     }
@@ -40,6 +44,16 @@ struct Sexp<'a> {
     items: Vec<Item<'a>>,
 }
 
+impl<'a> fmt::Display for Sexp<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let items = self.items.iter().map(|item| match *item {
+            Item::Text(ref s) => format!("{}", s),
+            Item::Sexp(ref sexp) => format!("{}", sexp),
+        }).collect::<Vec<String>>().concat();
+        write!(f, "⟦{} {}⟧", self.keyword, items)
+    }
+}
+
 impl<'a> Sexp<'a> {
     fn string_item(&self) -> Result<&'a str, String> {
         if self.items.len() == 1 {
@@ -53,7 +67,7 @@ impl<'a> Sexp<'a> {
     }
 
     fn has_args(&self) -> bool {
-        self.items.is_empty()
+        !self.items.is_empty()
     }
 }
 
@@ -89,8 +103,8 @@ struct FormattedText {
     formatting: pango::AttrList,
     indent: u32,
 }
-impl std::fmt::Debug for FormattedText {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl fmt::Debug for FormattedText {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "FormattedText({:?}, {})", self.text, self.indent)
     }
 }
@@ -116,8 +130,8 @@ impl<S: Into<String>> std::convert::From<S> for Error {
     }
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         write!(f, "Translation error: {}", self.0)
     }
 }
