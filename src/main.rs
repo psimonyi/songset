@@ -107,7 +107,7 @@ impl Song {
 }
 
 #[derive(Debug)]
-struct Verse {
+pub struct Verse {
     lines: Vec<FormattedText>,
     style: VerseType,
 }
@@ -184,8 +184,10 @@ fn tr_song(src: &Vec<Vec<Line>>) -> Result<Song, Error> {
     let mut i = src.iter();
     let meta = tr_meta_block(i.next().unwrap())?;
     let verses = i.map(tr_verse).collect::<Result<_, _>>()?;
+    let mut song = Song { meta, verses };
+    normalize_indents(&mut song);
 
-    Ok(Song { meta, verses })
+    Ok(song)
 }
 
 fn tr_meta_block(src: &Vec<Line>) -> Result<Vec<Metadata>, Error> {
@@ -331,7 +333,9 @@ fn tr_verse_meta(line: &Line) -> Option<VerseType> {
 }
 
 fn tr_line(src: &Line) -> Result<FormattedText, Error> {
-    tr_formatted_text(&src.items)
+    let mut ft = tr_formatted_text(&src.items)?;
+    ft.indent = src.indent.len() as u32;
+    Ok(ft)
 }
 
 fn tr_formatted_text(src: &Vec<Item>) -> Result<FormattedText, Error> {
@@ -374,4 +378,20 @@ fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText)
         }
     }
     Ok(())
+}
+
+fn normalize_indents(song: &mut Song) {
+    let mut indents = std::collections::HashSet::new();
+    for verse in &song.verses {
+        for line in &verse.lines {
+            indents.insert(line.indent);
+        }
+    }
+    let mut sizes: Vec<&u32> = indents.iter().collect();
+    sizes.sort();
+    for verse in &mut song.verses {
+        for line in &mut verse.lines {
+            line.indent = sizes.iter().position(|i| **i == line.indent).unwrap() as u32;
+        }
+    }
 }
