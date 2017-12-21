@@ -1,9 +1,12 @@
 use std::fmt;
 use std::fs;
+use std::io;
 use std::io::Read;
 use std::path::Path;
 
 extern crate pango;
+
+mod print;
 
 mod parse {
     include!(concat!(env!("OUT_DIR"), "/grammar.rs"));
@@ -11,23 +14,30 @@ mod parse {
 
 fn main() {
     let dir = Path::new("/home/psimonyi/prj/Songs/typesetting");
+    let out_dir = Path::new("/home/psimonyi/prj/Songs/out");
     assert!(dir.is_dir());
+    assert!(out_dir.is_dir());
+
     for entry in fs::read_dir(dir).unwrap() {
         let entry = entry.unwrap();
         println!("*** {} ***", entry.file_name().to_string_lossy());
         let path = entry.path();
-        let mut file = fs::File::open(path).unwrap();
-        let mut s = String::new();
-        file.read_to_string(&mut s).unwrap();
-        let parsed = parse::song(&s);
-        match parsed {
-            Ok(x) => match tr_song(&x) {
-                Ok(_) => (),
-                Err(e) => println!("Error: {:?}", e),
+        match read_song(&path) {
+            Err(e) => println!("Error: {}", e),
+            Ok(song) => {
+                let out_path = out_dir.join(entry.file_name());
+                print::pdf_song(&out_path, &song);
             },
-            Err(e) => println!("Parse error: {}", e),
         }
     }
+}
+
+fn read_song(filepath: &Path) -> Result<Song, Error> {
+    let mut file = fs::File::open(filepath)?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    let parsed = parse::song(&contents)?;
+    tr_song(&parsed)
 }
 
 // Structs produced by the parser:
@@ -80,9 +90,20 @@ enum Item<'a> {
 // Structs produced after translation:
 
 #[derive(Debug)]
-struct Song {
+pub struct Song {
     meta: Vec<Metadata>,
     verses: Vec<Verse>,
+}
+
+impl Song {
+    fn title<'a>(&'a self) -> Option<&'a FormattedText> {
+        for m in self.meta.iter() {
+            if let Metadata::Title(ref t) = *m {
+                return Some(t);
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug)]
@@ -110,6 +131,16 @@ impl fmt::Debug for FormattedText {
     }
 }
 
+impl FormattedText {
+    fn new() -> FormattedText {
+        FormattedText {
+            text: String::new(),
+            formatting: pango::AttrList::new(),
+            indent: 0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Error (String);
 
@@ -125,8 +156,20 @@ impl std::error::Error for Error {
     }
 }
 
-impl<S: Into<String>> std::convert::From<S> for Error {
-    fn from(message: S) -> Error {
+impl From<parse::ParseError> for Error {
+    fn from(error: parse::ParseError) -> Error {
+        Error(format!("Parser: {}", error))
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Error {
+        Error(format!("I/O error: {}", error))
+    }
+}
+
+impl From<String> for Error {
+    fn from(message: String) -> Error {
         Error(message.into())
     }
 }
@@ -194,7 +237,6 @@ fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
         "TODO" => Ok(Metadata::Ignored),
         "TODO-special-formatting" => Ok(Metadata::Ignored),
         "note" => Ok(Metadata::Ignored),
-        "ignore-this-file" => Ok(Metadata::Ignored),
         "inline-chorus-markers" => Ok(Metadata::Ignored),
         "inline-chorus" => Ok(Metadata::Ignored),
         "white-book-note" => Ok(Metadata::Ignored),
@@ -293,11 +335,7 @@ fn tr_line(src: &Line) -> Result<FormattedText, Error> {
 }
 
 fn tr_formatted_text(src: &Vec<Item>) -> Result<FormattedText, Error> {
-    let mut ft = FormattedText {
-        text: String::new(),
-        formatting: pango::AttrList::new(),
-        indent: 0,
-    };
+    let mut ft = FormattedText::new();
     add_formatted_text(src, &mut ft)?;
     Ok(ft)
 }

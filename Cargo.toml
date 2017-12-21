@@ -8,7 +8,9 @@ build = "build.rs"
 peg = "0.5"
 
 [dependencies]
+cairo-rs = "0.3.0"
 pango = "0.3.0"
+pangocairo = "0.4.1"
 
 [dependencies.gtk]
 version = "0.3.0"
