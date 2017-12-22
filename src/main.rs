@@ -107,16 +107,11 @@ impl Song {
 }
 
 #[derive(Debug)]
-pub struct Verse {
-    lines: Vec<FormattedText>,
-    style: VerseType,
-}
-
-#[derive(Debug)]
-enum VerseType {
-    Normal,
-    Refrain(String), // e.g. "Chorus:"
-    ChorusInstance(String), // e.g. "Chorus"
+enum Verse {
+    Normal(Vec<FormattedText>),
+    ChorusDef(String, Vec<FormattedText>),
+    RefrainDef(String, Vec<FormattedText>),
+    ChorusRef(String),
     SectionBreak(String), // e.g. alt language or another poem to the same tune
 }
 
@@ -273,63 +268,75 @@ enum Metadata {
 
 
 fn tr_verse(src: &Vec<Line>) -> Result<Verse, Error> {
-    let mut i = src.iter().peekable();
-    let style = {
-        let line = i.peek().unwrap(); // It's the first; there must be one.
-        tr_verse_meta(line)
-    };
-    if style.is_some() {
-        // We used the peeked line so advance the iterator.
-        i.next();
-    }
+    // A verse is normally just lines of formatted text.  But special verse
+    // types may be introduced by a special sexp.  For easier parsing, we
+    // expect that to be on a line by itself (ignoring whitespace).
 
-    let lines = i.map(tr_line).collect::<Result<_,_>>()?;
-    Ok(Verse {
-        lines,
-        style: style.unwrap_or(VerseType::Normal),
-    })
+    let mut i = src.iter().peekable();
+
+    // Get the non-whitespace items in the first line.
+    let mut items = {
+        let line = i.peek().unwrap(); // The parser won't produce empty verses.
+
+        // Ignore whitespace when looking for the meta sexp.
+        line.items.iter().filter(|item| match **item {
+            Item::Text(s) if str_is_whitespace(s) => false,
+            _ => true,
+        })
+    };
+
+    // The meta sexp must be the only (non-whitespace) item on the line.
+    let item = match (items.next(), items.next()) {
+        (Some(item), None) => item,
+        _ => return tr_normal_verse(i),
+    };
+
+    // For ChorusInstance and SectionBreak we should also check that the rest
+    // of the verse is empty... TODO
+    // The meta sexp's line hasn't been consumed yet, so every branch here
+    // (except _ which doesn't match a meta sexp) must call i.next().
+    match *item {
+        Item::Sexp(Sexp { keyword: "Chorus:", .. }) => {
+            i.next();
+            let label = String::from("Chorus");
+            Ok(Verse::ChorusDef(label, tr_lines(i)?))
+        },
+        Item::Sexp(Sexp { keyword: "Refrain:", .. }) => {
+            i.next();
+            let label = String::from("Refrain");
+            Ok(Verse::RefrainDef(label, tr_lines(i)?))
+        },
+        Item::Sexp(Sexp { keyword: "Chorus", .. }) => {
+            i.next();
+            let label = String::from("Chorus");
+            Ok(Verse::ChorusRef(label))
+        },
+        Item::Sexp(ref sexp @ Sexp { keyword: "refrain", .. }) => {
+            // TODO change the keyword to chorus
+            i.next();
+            let label = sexp.string_item()?.to_string();
+            Ok(Verse::ChorusRef(label))
+        },
+        Item::Sexp(ref sexp @ Sexp { keyword: "section-break", .. }) => {
+            i.next();
+            let label = sexp.string_item()?.to_string();
+            Ok(Verse::SectionBreak(label))
+        },
+        _ => {
+            tr_normal_verse(i)
+        },
+    }
 }
 
-fn tr_verse_meta(line: &Line) -> Option<VerseType> {
-    // For ChorusInstance and SectionBreak we should also check that the rest
-    // of the verse is empty...
-    let mut rv = None;
-    for item in &line.items {
-        match *item {
-            Item::Text(ref s) => {
-                if !str_is_whitespace(s) { return None; }
-            },
-            Item::Sexp(ref sexp) => {
-                if rv.is_some() { return None; }
-                match *sexp {
-                    Sexp { keyword: "Chorus:", ref items }
-                    if items.is_empty() => {
-                        rv = Some(VerseType::Refrain(String::from("Chorus")));
-                    },
-                    Sexp { keyword: "Refrain:", ref items }
-                    if items.is_empty() => {
-                        rv = Some(VerseType::Refrain(String::from("Refrain")));
-                    },
-                    Sexp { keyword: "Chorus", ref items }
-                    if items.is_empty() => {
-                        rv = Some(VerseType::ChorusInstance(String::from("Chorus")));
-                    },
-                    Sexp { keyword: "refrain", .. } => {
-                        rv = sexp.string_item().ok()
-                            .map(String::from)
-                            .map(VerseType::ChorusInstance);
-                    },
-                    Sexp { keyword: "section-break", .. } => {
-                        rv = sexp.string_item().ok()
-                            .map(String::from)
-                            .map(VerseType::SectionBreak);
-                    },
-                    _ => return None,
-                }
-            },
-        }
-    }
-    rv
+fn tr_normal_verse<'a, I>(src: I) -> Result<Verse, Error>
+where I: Iterator<Item = &'a Line<'a>> {
+    let lines = src.map(tr_line).collect::<Result<_, _>>()?;
+    Ok(Verse::Normal(lines))
+}
+
+fn tr_lines<'a, I>(src: I) -> Result<Vec<FormattedText>, Error>
+where I: Iterator<Item = &'a Line<'a>> {
+    src.map(tr_line).collect()
 }
 
 fn tr_line(src: &Line) -> Result<FormattedText, Error> {
@@ -383,15 +390,39 @@ fn add_formatted_text(src: &Vec<Item>, ft: &mut FormattedText)
 fn normalize_indents(song: &mut Song) {
     let mut indents = std::collections::HashSet::new();
     for verse in &song.verses {
-        for line in &verse.lines {
-            indents.insert(line.indent);
+        if let Some(lines) = verse_lines(verse) {
+            for line in lines {
+                indents.insert(line.indent);
+            }
         }
     }
     let mut sizes: Vec<&u32> = indents.iter().collect();
     sizes.sort();
     for verse in &mut song.verses {
-        for line in &mut verse.lines {
-            line.indent = sizes.iter().position(|i| **i == line.indent).unwrap() as u32;
+        if let Some(lines) = verse_lines_mut(verse) {
+            for line in lines {
+                line.indent = sizes.iter().position(|i| **i == line.indent).unwrap() as u32;
+            }
         }
+    }
+}
+
+fn verse_lines(verse: &Verse) -> Option<&Vec<FormattedText>> {
+    match *verse {
+        Verse::Normal(ref lines) => Some(lines),
+        Verse::ChorusDef(_, ref lines) => Some(lines),
+        Verse::RefrainDef(_, ref lines) => Some(lines),
+        Verse::ChorusRef(_) => None,
+        Verse::SectionBreak(_) => None,
+    }
+}
+
+fn verse_lines_mut(verse: &mut Verse) -> Option<&mut Vec<FormattedText>> {
+    match *verse {
+        Verse::Normal(ref mut lines) => Some(lines),
+        Verse::ChorusDef(_, ref mut lines) => Some(lines),
+        Verse::RefrainDef(_, ref mut lines) => Some(lines),
+        Verse::ChorusRef(_) => None,
+        Verse::SectionBreak(_) => None,
     }
 }

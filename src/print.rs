@@ -53,10 +53,14 @@ fn draw_title(cr: &Cr, song: &Song) {
     pc::show_layout(cr, &layout);
 }
 
+use verse_lines;
 const INDENT: f64 = 24.0; /* points */
 fn draw_verse(cr: &Cr, verse: &Verse) {
     let layout = base_layout(cr);
-    for line in &verse.lines {
+    let lines = verse_lines(&verse);
+    if lines.is_none() { return; }
+    let lines = lines.unwrap();
+    for line in lines {
         cr.rel_move_to(line.indent as f64 * INDENT, 0.0);
 
         layout.set_text(&line.text);
