@@ -65,19 +65,33 @@ impl<'a> fmt::Display for Sexp<'a> {
 }
 
 impl<'a> Sexp<'a> {
-    fn string_item(&self) -> Result<&'a str, String> {
-        if self.items.len() == 1 {
-            match self.items[0] {
-                Item::Text(s) => Ok(s),
-                _ => Err(format!("Expected string argument in {:?}", self)),
-            }
-        } else {
-            Err(format!("Exactly one argument required in {:?}", self))
+    fn opt_string_arg(&self) -> Result<Option<&'a str>, String> {
+        let item = match self.items.len() {
+            0 => return Ok(None),
+            1 => &self.items[0],
+            _ => return Err(format!("Too many arguments in {:?}", self)),
+        };
+        match *item {
+            Item::Text(s) => Ok(Some(s)),
+            _ => Err(format!("Expected string argument in {:?}", self)),
         }
+    }
+
+    fn string_arg(&self) -> Result<&'a str, String> {
+        self.opt_string_arg()?
+            .ok_or(format!("An argument is required for {:?}", self))
     }
 
     fn has_args(&self) -> bool {
         !self.items.is_empty()
+    }
+
+    fn require_no_args(&self) -> Result<(), String> {
+        if self.has_args() {
+            Err(format!("{:?} must have no arguments", self))
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -218,10 +232,10 @@ fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
         "white-book-title" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
         "author" => Ok(Metadata::Attrib(tr_formatted_text(&sexp.items)?)),
 
-        "category" => Ok(Metadata::Category(sexp.string_item()?.into())),
-        "index" => Ok(Metadata::IndexEntry(sexp.string_item()?.into())),
-        "lang" => Ok(Metadata::Language(sexp.string_item()?.into())),
-        "dance" => Ok(Metadata::Dance(sexp.string_item()?.into())),
+        "category" => Ok(Metadata::Category(sexp.string_arg()?.into())),
+        "index" => Ok(Metadata::IndexEntry(sexp.string_arg()?.into())),
+        "lang" => Ok(Metadata::Language(sexp.string_arg()?.into())),
+        "dance" => Ok(Metadata::Dance(sexp.string_arg()?.into())),
         "descant" => {
             if sexp.has_args() {
                 return Err(Error::new(format!(
@@ -291,40 +305,45 @@ fn tr_verse(src: &Vec<Line>) -> Result<Verse, Error> {
         _ => return tr_normal_verse(i),
     };
 
-    // For ChorusInstance and SectionBreak we should also check that the rest
-    // of the verse is empty... TODO
     // The meta sexp's line hasn't been consumed yet, so every branch here
     // (except _ which doesn't match a meta sexp) must call i.next().
     match *item {
-        Item::Sexp(Sexp { keyword: "Chorus:", .. }) => {
+        Item::Sexp(ref sexp @ Sexp { keyword: "Chorus:", .. }) => {
             i.next();
-            let label = String::from("Chorus");
+            let label = sexp.opt_string_arg()?.unwrap_or("Chorus").to_string();
             Ok(Verse::ChorusDef(label, tr_lines(i)?))
         },
-        Item::Sexp(Sexp { keyword: "Refrain:", .. }) => {
+        Item::Sexp(ref sexp @ Sexp { keyword: "Refrain:", .. }) => {
             i.next();
-            let label = String::from("Refrain");
+            let label = sexp.opt_string_arg()?.unwrap_or("Refrain").to_string();
             Ok(Verse::RefrainDef(label, tr_lines(i)?))
         },
-        Item::Sexp(Sexp { keyword: "Chorus", .. }) => {
+        Item::Sexp(ref sexp @ Sexp { keyword: "Chorus", .. }) => {
             i.next();
+            verse_requires_no_lines(i)?;
+            sexp.require_no_args()?;
             let label = String::from("Chorus");
-            Ok(Verse::ChorusRef(label))
-        },
-        Item::Sexp(ref sexp @ Sexp { keyword: "refrain", .. }) => {
-            // TODO change the keyword to chorus
-            i.next();
-            let label = sexp.string_item()?.to_string();
             Ok(Verse::ChorusRef(label))
         },
         Item::Sexp(ref sexp @ Sexp { keyword: "section-break", .. }) => {
             i.next();
-            let label = sexp.string_item()?.to_string();
+            verse_requires_no_lines(i)?;
+            let label = sexp.string_arg()?.to_string();
             Ok(Verse::SectionBreak(label))
         },
         _ => {
             tr_normal_verse(i)
         },
+    }
+}
+
+fn verse_requires_no_lines<'a, I>(mut i: I) -> Result<(), Error>
+where I: Iterator<Item = &'a Line<'a>> {
+    match i.next() {
+        Some(line) => Err(Error::new(format!(
+            "This verse contains {:?} but is of a type that should be empty",
+            line))),
+        None => Ok(()),
     }
 }
 
