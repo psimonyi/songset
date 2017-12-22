@@ -228,8 +228,8 @@ fn tr_meta_entry(sexp: &Sexp) -> Result<Metadata, Error> {
         "ref" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
 
         // To be translated
-        "white-book" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
-        "white-book-title" => Ok(Metadata::Title(tr_formatted_text(&sexp.items)?)),
+        "white-book" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
+        "white-book-title" => Ok(Metadata::CrossRef(tr_formatted_text(&sexp.items)?)),
         "author" => Ok(Metadata::Attrib(tr_formatted_text(&sexp.items)?)),
 
         "category" => Ok(Metadata::Category(sexp.string_arg()?.into())),
