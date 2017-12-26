@@ -4,6 +4,9 @@ use std::io;
 use std::io::Read;
 use std::path::Path;
 
+#[macro_use]
+extern crate lazy_static;
+
 extern crate pango;
 
 mod print;
@@ -117,6 +120,34 @@ impl Song {
             }
         }
         None
+    }
+
+    fn lang<'a>(&'a self) -> Option<&'a str> {
+        for m in self.meta.iter() {
+            if let Metadata::Language(ref lang) = *m {
+                return Some(lang);
+            }
+        }
+        None
+    }
+
+    fn file_as(&self) -> Option<String> {
+        let title = &self.title()?.text;
+        let lang = self.lang().unwrap_or("en");
+        let ignore = match lang {
+            "en" => vec!["the ", "a "],
+            "fr" => vec!["le ", "la ", "l’", "une ", "un "],
+            _ => vec![],
+        };
+        let lc_title = title.to_lowercase();
+        for prefix in ignore {
+            if lc_title.starts_with(prefix) {
+                // XXX Unsafe if to_lowercase changes the length!
+                let (a, b) = title.split_at(prefix.len());
+                return Some(format!("{}, {}", b, a));
+            }
+        }
+        Some(title.to_string())
     }
 }
 

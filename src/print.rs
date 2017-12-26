@@ -25,106 +25,217 @@ const MIN_FONT_SIZE: Points = 13.0;
 fn points_from_inches(size: f64) -> f64 {
     size * 72.0
 }
-fn points_from_pango(size: i32) -> f64 {
-    size as f64 / pango::SCALE as f64
+fn points_from_pango<I: Into<f64>>(size: I) -> f64 {
+    size.into() / pango::SCALE as f64
 }
 fn pango_from_points(size: f64) -> f64 {
     size * pango::SCALE as f64
+}
+
+struct Size (f64, f64);
+impl<I: Into<f64>> From<(I, I)> for Size {
+    fn from(tuple: (I, I)) -> Size {
+        Size (tuple.0.into(), tuple.1.into())
+    }
+}
+
+struct Maximum(f64);
+impl Maximum {
+    fn new(init: f64) -> Maximum {
+        Maximum(init)
+    }
+    fn see(&mut self, sample: f64) {
+        self.0 = self.0.max(sample);
+    }
+    fn get(&self) -> f64 {
+        self.0
+    }
+}
+impl Default for Maximum {
+    fn default() -> Self {
+        Self::new(f64::default())
+    }
+}
+
+struct FontDesc(pango::FontDescription);
+unsafe impl Sync for FontDesc {}
+impl<'a> From<&'a FontDesc> for Option<&'a pango::FontDescription> {
+    fn from(d: &FontDesc) -> Option<&pango::FontDescription> {
+        Some(&d.0)
+    }
+}
+impl ::std::ops::Deref for FontDesc {
+    type Target = pango::FontDescription;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+lazy_static! {
+    static ref BASE_FONT: FontDesc = {
+        let mut font = pango::FontDescription::new();
+        font.set_family("Caladea");
+        font.set_absolute_size(pango_from_points(12.0));
+        FontDesc(font)
+    };
 }
 
 pub fn pdf_song(path: &FsPath, song: &Song) {
     let surface = cairo::PDFSurface::create(path, PAGE_WIDTH, PAGE_HEIGHT);
     let cr = cairo::Context::new(&surface);
 
-    let mut title_font = pango::FontDescription::new();
-    title_font.set_family("Caladea");
-    title_font.set_absolute_size(pango_from_points(20.0));
-    title_font.set_weight(pango::Weight::Bold);
-
     cr.move_to(points_from_inches(1.5), points_from_inches(0.5));
-    draw_title(&cr, &title_font, song);
-    cr.rel_move_to(0.0, 20.0*1.25*2.0);
+    draw_title(&cr, song);
 
-    for verse in &song.verses {
-        draw_verse(&cr, verse);
-        cr.rel_move_to(0.0, 28.0);
-    }
+    draw_verses(&cr, song);
 
+    draw_file_letter(&cr, song);
     cr.show_page();
 }
 
-fn draw_title(cr: &Cr, font: &FontDescription, song: &Song) {
+lazy_static! {
+    static ref PAGING_FONT: FontDesc = {
+        let mut font = BASE_FONT.clone();
+        font.set_absolute_size(pango_from_points(12.0));
+        FontDesc(font)
+    };
+}
+
+fn draw_file_letter(cr: &Cr, song: &Song) {
     let layout = pc::create_layout(&cr).unwrap();
-    layout.set_font_description(font);
+    layout.set_font_description(&*PAGING_FONT);
+
+    let title = song.file_as().expect("Song requires a title");
+    let letter = title.chars().next().expect("Song needs a non-empty title");
+
+    layout.set_text(&letter.to_string());
+    let (width, _height) = layout.get_size();
+    cr.move_to(PAGE_WIDTH - points_from_inches(0.5), points_from_inches(0.5));
+    cr.rel_move_to(points_from_pango(-width), 0.0);
+    pc::show_layout(cr, &layout);
+}
+
+lazy_static! {
+    static ref TITLE_FONT: FontDesc = {
+        let mut font = BASE_FONT.clone();
+        font.set_absolute_size(pango_from_points(20.0));
+        font.set_weight(pango::Weight::Bold);
+        FontDesc(font)
+    };
+}
+
+fn draw_title(cr: &Cr, song: &Song) {
+    let layout = pc::create_layout(&cr).unwrap();
+    layout.set_font_description(&*TITLE_FONT);
 
     let title = song.title().expect("Song requires a title");
 
     layout.set_text(&title.text);
     layout.set_attributes(&title.formatting);
     pc::show_layout(cr, &layout);
+    let (_width, height) = layout.get_size();
+    cr.rel_move_to(0.0, 1.5 * points_from_pango(height));
 }
 
-fn draw_verse(cr: &Cr, verse: &Verse) {
-    let mut verse_font = pango::FontDescription::new();
-    verse_font.set_family("Caladea");
-    verse_font.set_absolute_size(pango_from_points(FONT_SIZE));
-    let mut label_font = verse_font.clone();
-    label_font.set_weight(pango::Weight::Bold);
-    let mut alone_font = verse_font.clone();
-    alone_font.set_style(pango::Style::Italic);
+fn draw_verses(cr: &Cr, song: &Song) {
+    let (pat, size) = draw_verses_straight(cr, song);
+    cr.set_source(&*pat);
+    cr.paint();
+}
 
+fn draw_verses_straight(cr: &Cr, song: &Song) -> (Box<cairo::Pattern>, Size) {
+    let mut font = BASE_FONT.clone();
+    font.set_absolute_size(pango_from_points(FONT_SIZE));
+
+    cr.push_group();
+    for verse in &song.verses {
+        draw_verse(&cr, &font, &verse);
+        cr.rel_move_to(0.0, 14.0);
+    }
+    let pat = cr.pop_group();
+    (pat, Size(1., 1.))
+}
+
+fn draw_verse(cr: &Cr, font: &FontDescription, verse: &Verse) {
     match *verse {
         Verse::Normal(ref lines) => {
-            draw_lines(cr, &verse_font, lines);
+            draw_lines(cr, &font, lines);
         },
         Verse::ChorusDef(ref label, ref lines) => {
             let label = &format!("{}:", label);
-            let (_width, height) = draw_label(cr, &label_font, label);
+            let Size(_width, height) = draw_label(cr, &font, label);
             cr.rel_move_to(0.0, points_from_pango(height));
-            draw_lines(cr, &verse_font, lines);
+            draw_lines(cr, &font, lines);
         },
         Verse::RefrainDef(ref label, ref lines) => {
+            cr.rel_move_to(0.0, -14.0);
             let label = &format!("{}: ", label);
-            let (width, _height) = draw_label(cr, &label_font, label);
+            let Size(width, _height) = draw_label(cr, &font, label);
             cr.rel_move_to(points_from_pango(width), 0.0);
-            draw_lines(cr, &verse_font, lines);
+            draw_lines(cr, &font, lines);
             cr.rel_move_to(-points_from_pango(width), 0.0);
         },
         Verse::ChorusRef(ref label) => {
-            draw_label(cr, &alone_font, label);
+            draw_marker(cr, &font, label);
         },
         Verse::SectionBreak(ref label) => {
-            draw_label(cr, &alone_font, label);
+            draw_marker(cr, &font, label);
         },
     }
 }
 
-fn draw_lines(cr: &Cr, font: &FontDescription, lines: &[FormattedText]) {
+fn draw_lines(cr: &Cr, font: &FontDescription, lines: &[FormattedText])
+-> Size {
     let layout = pc::create_layout(&cr).unwrap();
     layout.set_font_description(font);
+    let mut max_width = Maximum::new(0.0);
+    let mut total_height = 0.0;
 
     for line in lines {
-        cr.rel_move_to(line.indent as f64 * INDENT, 0.0);
+        let indent = f64::from(line.indent) * INDENT;
+        cr.rel_move_to(indent, 0.0);
 
         layout.set_text(&line.text);
         layout.set_attributes(&line.formatting);
         pc::show_layout(cr, &layout);
 
-        cr.rel_move_to(-(line.indent as f64) * INDENT, 0.0);
+        cr.rel_move_to(-indent, 0.0);
 
-        let (_line_width, line_height) = layout.get_size();
+        let (line_width, line_height) = layout.get_size();
+        max_width.see(indent + points_from_pango(line_width));
         cr.rel_move_to(0.0, points_from_pango(line_height));
+        total_height += points_from_pango(line_height);
     }
-    cr.rel_move_to(0.0, -14.0);
+    Size(max_width.get(), total_height)
 }
 
-fn draw_label(cr: &Cr, font: &FontDescription, label: &str)
--> (i32, i32) {
+fn draw_label(cr: &Cr, font: &FontDescription, label: &str) -> Size {
+    let bold = pango::AttrList::new();
+    bold.insert(pango::Attribute::new_weight(pango::Weight::Bold).unwrap());
+
     let layout = pc::create_layout(&cr).unwrap();
     layout.set_font_description(font);
 
     layout.set_text(label);
+    layout.set_attributes(&bold);
     pc::show_layout(cr, &layout);
 
-    layout.get_size()
+    layout.get_size().into()
+}
+
+fn draw_marker(cr: &Cr, font: &FontDescription, label: &str) -> Size {
+    let italic = pango::AttrList::new();
+    italic.insert(pango::Attribute::new_style(pango::Style::Italic).unwrap());
+
+    let layout = pc::create_layout(&cr).unwrap();
+    layout.set_font_description(font);
+
+    layout.set_text(label);
+    layout.set_attributes(&italic);
+    pc::show_layout(cr, &layout);
+
+    let (w, h) = layout.get_size();
+    cr.rel_move_to(0.0, points_from_pango(h));
+
+    (w, h).into()
 }
