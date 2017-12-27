@@ -32,10 +32,24 @@ fn pango_from_points(size: f64) -> f64 {
     size * pango::SCALE as f64
 }
 
+#[derive(Debug)]
 struct Size (f64, f64);
 impl<I: Into<f64>> From<(I, I)> for Size {
     fn from(tuple: (I, I)) -> Size {
         Size (tuple.0.into(), tuple.1.into())
+    }
+}
+impl Size {
+    fn map<F: Fn(f64) -> f64>(mut self, f: F) -> Size {
+        self.0 = f(self.0);
+        self.1 = f(self.1);
+        self
+    }
+    fn width(&self) -> f64 {
+        self.0
+    }
+    fn height(&self) -> f64 {
+        self.1
     }
 }
 
@@ -139,6 +153,7 @@ fn draw_title(cr: &Cr, song: &Song) {
 
 fn draw_verses(cr: &Cr, song: &Song) {
     let (pat, size) = draw_verses_straight(cr, song);
+    println!("{:?}", size);
     cr.set_source(&*pat);
     cr.paint();
 }
@@ -146,40 +161,47 @@ fn draw_verses(cr: &Cr, song: &Song) {
 fn draw_verses_straight(cr: &Cr, song: &Song) -> (Box<cairo::Pattern>, Size) {
     let mut font = BASE_FONT.clone();
     font.set_absolute_size(pango_from_points(FONT_SIZE));
+    let mut max_width = Maximum::new(0.0);
+    let mut height = 0.0;
 
     cr.push_group();
     for verse in &song.verses {
-        draw_verse(&cr, &font, &verse);
-        cr.rel_move_to(0.0, 14.0);
+        if let Verse::RefrainDef(_, _) = *verse {} else {
+            cr.rel_move_to(0.0, 14.0);
+        }
+        let Size(w, h) = draw_verse(&cr, &font, &verse);
+        max_width.see(w);
+        height += h + 14.0;
     }
     let pat = cr.pop_group();
-    (pat, Size(1., 1.))
+    (pat, Size(max_width.get(), height))
 }
 
-fn draw_verse(cr: &Cr, font: &FontDescription, verse: &Verse) {
+fn draw_verse(cr: &Cr, font: &FontDescription, verse: &Verse) -> Size {
     match *verse {
         Verse::Normal(ref lines) => {
-            draw_lines(cr, &font, lines);
+            draw_lines(cr, &font, lines)
         },
         Verse::ChorusDef(ref label, ref lines) => {
             let label = &format!("{}:", label);
-            let Size(_width, height) = draw_label(cr, &font, label);
-            cr.rel_move_to(0.0, points_from_pango(height));
-            draw_lines(cr, &font, lines);
+            let Size(label_w, label_h) = draw_label(cr, &font, label);
+            cr.rel_move_to(0.0, label_h);
+            let Size(body_w, body_h) = draw_lines(cr, &font, lines);
+            Size(label_w.max(body_w), label_h + body_h)
         },
         Verse::RefrainDef(ref label, ref lines) => {
-            cr.rel_move_to(0.0, -14.0);
             let label = &format!("{}: ", label);
-            let Size(width, _height) = draw_label(cr, &font, label);
-            cr.rel_move_to(points_from_pango(width), 0.0);
-            draw_lines(cr, &font, lines);
-            cr.rel_move_to(-points_from_pango(width), 0.0);
+            let Size(label_w, _) = draw_label(cr, &font, label);
+            cr.rel_move_to(label_w, 0.0);
+            let Size(body_w, body_h) = draw_lines(cr, &font, lines);
+            cr.rel_move_to(-label_w, 0.0);
+            Size(label_w + body_w, body_h)
         },
         Verse::ChorusRef(ref label) => {
-            draw_marker(cr, &font, label);
+            draw_marker(cr, &font, label)
         },
         Verse::SectionBreak(ref label) => {
-            draw_marker(cr, &font, label);
+            draw_marker(cr, &font, label)
         },
     }
 }
@@ -220,7 +242,8 @@ fn draw_label(cr: &Cr, font: &FontDescription, label: &str) -> Size {
     layout.set_attributes(&bold);
     pc::show_layout(cr, &layout);
 
-    layout.get_size().into()
+    let size: Size = layout.get_size().into();
+    size.map(points_from_pango)
 }
 
 fn draw_marker(cr: &Cr, font: &FontDescription, label: &str) -> Size {
@@ -234,8 +257,8 @@ fn draw_marker(cr: &Cr, font: &FontDescription, label: &str) -> Size {
     layout.set_attributes(&italic);
     pc::show_layout(cr, &layout);
 
-    let (w, h) = layout.get_size();
-    cr.rel_move_to(0.0, points_from_pango(h));
-
-    (w, h).into()
+    let size_: Size = layout.get_size().into();
+    let size = size_.map(points_from_pango);
+    cr.rel_move_to(0.0, size.height());
+    size
 }
