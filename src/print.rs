@@ -19,8 +19,9 @@ type Points = f64;
 const PAGE_WIDTH: Points = 8.5 * 72.0;
 const PAGE_HEIGHT: Points = 11.0 * 72.0;
 const INDENT: Points = 24.0;
-const FONT_SIZE: Points = 16.0;
-const MIN_FONT_SIZE: Points = 13.0;
+const FONT_SIZE: i32 = 16; // points
+const MIN_FONT_SIZE: i32 = 13; // points
+const MARGIN_RIGHT: Points = 0.5 * 72.0;
 
 fn points_from_inches(size: f64) -> f64 {
     size * 72.0
@@ -152,15 +153,33 @@ fn draw_title(cr: &Cr, song: &Song) {
 }
 
 fn draw_verses(cr: &Cr, song: &Song) {
-    let (pat, size) = draw_verses_straight(cr, song);
-    println!("{:?}", size);
+    let (start_x, start_y) = cr.get_current_point();
+
+    // Font sizes in half-point decrements from FONT_SIZE down to
+    // MIN_FONT_SIZE, inclusive:
+    let font_sizes = ((2 * MIN_FONT_SIZE)..(2 * FONT_SIZE + 1))
+        .map(|x| f64::from(x) / 2.0).rev();
+
+    for font_size in font_sizes {
+        cr.move_to(start_x, start_y);
+        let (pat, size) = draw_verses_straight(cr, song, font_size);
+        if start_x + size.width() + MARGIN_RIGHT <= PAGE_WIDTH {
+            cr.set_source(&*pat);
+            cr.paint();
+            return;
+        }
+    }
+    println!("Can't fit it all in!");
+    cr.move_to(start_x, start_y);
+    let (pat, _size) = draw_verses_straight(cr, song, MIN_FONT_SIZE.into());
     cr.set_source(&*pat);
     cr.paint();
 }
 
-fn draw_verses_straight(cr: &Cr, song: &Song) -> (Box<cairo::Pattern>, Size) {
+fn draw_verses_straight(cr: &Cr, song: &Song, font_size: Points)
+-> (Box<cairo::Pattern>, Size) {
     let mut font = BASE_FONT.clone();
-    font.set_absolute_size(pango_from_points(FONT_SIZE));
+    font.set_absolute_size(pango_from_points(font_size));
     let mut max_width = Maximum::new(0.0);
     let mut height = 0.0;
 
