@@ -29,7 +29,10 @@ fn main() {
             Err(e) => println!("Error: {}", e),
             Ok(song) => {
                 let out_path = out_dir.join(entry.file_name());
-                print::pdf_song(&out_path, &song);
+                match print::pdf_song(&out_path, &song) {
+                    Err(_) => println!("Print error"),
+                    Ok(_) => {},
+                }
             },
         }
     }

@@ -22,6 +22,7 @@ const INDENT: Points = 24.0;
 const FONT_SIZE: i32 = 16; // points
 const MIN_FONT_SIZE: i32 = 13; // points
 const MARGIN_RIGHT: Points = 0.5 * 72.0;
+const GUTTER: Points = 18.0;
 
 fn points_from_inches(size: f64) -> f64 {
     size * 72.0
@@ -95,17 +96,18 @@ lazy_static! {
     };
 }
 
-pub fn pdf_song(path: &FsPath, song: &Song) {
+pub fn pdf_song(path: &FsPath, song: &Song) -> Result<(), ()> {
     let surface = cairo::PDFSurface::create(path, PAGE_WIDTH, PAGE_HEIGHT);
     let cr = cairo::Context::new(&surface);
 
     cr.move_to(points_from_inches(1.5), points_from_inches(0.5));
     draw_title(&cr, song);
 
-    draw_verses(&cr, song);
+    try_draw_verses(&cr, song)?;
 
     draw_file_letter(&cr, song);
     cr.show_page();
+    Ok(())
 }
 
 lazy_static! {
@@ -152,48 +154,91 @@ fn draw_title(cr: &Cr, song: &Song) {
     cr.rel_move_to(0.0, 1.5 * points_from_pango(height));
 }
 
-fn draw_verses(cr: &Cr, song: &Song) {
-    let (start_x, start_y) = cr.get_current_point();
-
-    // Font sizes in half-point decrements from FONT_SIZE down to
-    // MIN_FONT_SIZE, inclusive:
-    let font_sizes = ((2 * MIN_FONT_SIZE)..(2 * FONT_SIZE + 1))
-        .map(|x| f64::from(x) / 2.0).rev();
-
-    for font_size in font_sizes {
-        cr.move_to(start_x, start_y);
-        let (pat, size) = draw_verses_straight(cr, song, font_size);
-        if start_x + size.width() + MARGIN_RIGHT <= PAGE_WIDTH {
-            cr.set_source(&*pat);
-            cr.paint();
-            return;
-        }
-    }
-    println!("Can't fit it all in!");
-    cr.move_to(start_x, start_y);
-    let (pat, _size) = draw_verses_straight(cr, song, MIN_FONT_SIZE.into());
-    cr.set_source(&*pat);
-    cr.paint();
+#[derive(Clone, Debug)]
+struct LayoutConfig<'a> {
+    song: &'a Song,
+    font_size: Points,
+    verse_gap: Points,
+    column_break: Option<Points>,
 }
 
-fn draw_verses_straight(cr: &Cr, song: &Song, font_size: Points)
--> (Box<cairo::Pattern>, Size) {
+impl<'a> LayoutConfig<'a> {
+    fn new(song: &'a Song) -> LayoutConfig<'a> {
+        LayoutConfig {
+            song,
+            font_size: FONT_SIZE.into(),
+            verse_gap: 14.0,
+            column_break: None,
+        }
+    }
+
+    fn shrink_h(&mut self) -> Result<(), ()> {
+        if self.font_size > MIN_FONT_SIZE.into() {
+            self.font_size -= 0.5;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn shrink_v(&mut self) -> Result<(), ()> {
+        if self.font_size > MIN_FONT_SIZE.into() {
+            self.font_size -= 0.5;
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+fn try_draw_verses(cr: &Cr, song: &Song) -> Result<(), ()> {
+    let (start_x, start_y) = cr.get_current_point();
+    let avail_width = PAGE_WIDTH - start_x - MARGIN_RIGHT;
+    let avail_height = PAGE_HEIGHT - start_y - points_from_inches(0.5);
+    let mut config = LayoutConfig::new(song);
+
+    loop {
+        cr.move_to(start_x, start_y);
+        let (pat, size) = draw_verses(cr, &config);
+        if size.width() > avail_width {
+            config.shrink_h()?;
+        } else if size.height() > avail_height {
+            config.shrink_v()?;
+        } else {
+            cr.set_source(&*pat);
+            cr.paint();
+            return Ok(());
+        }
+    }
+}
+
+fn draw_verses(cr: &Cr, config: &LayoutConfig) -> (Box<cairo::Pattern>, Size) {
+    let (start_x, start_y) = cr.get_current_point();
     let mut font = BASE_FONT.clone();
-    font.set_absolute_size(pango_from_points(font_size));
+    font.set_absolute_size(pango_from_points(config.font_size));
     let mut max_width = Maximum::new(0.0);
+    let mut max_height = Maximum::new(0.0);
     let mut height = 0.0;
 
     cr.push_group();
-    for verse in &song.verses {
+    for verse in &config.song.verses {
         if let Verse::RefrainDef(_, _) = *verse {} else {
             cr.rel_move_to(0.0, 14.0);
         }
         let Size(w, h) = draw_verse(&cr, &font, &verse);
         max_width.see(w);
         height += h + 14.0;
+        if let Some(h) = config.column_break {
+            if height > h {
+                max_height.see(height);
+                height = 0.0;
+                cr.move_to(start_x + max_width.get() + GUTTER, start_y);
+            }
+        }
     }
     let pat = cr.pop_group();
-    (pat, Size(max_width.get(), height))
+    max_height.see(height);
+    (pat, Size(max_width.get(), max_height.get()))
 }
 
 fn draw_verse(cr: &Cr, font: &FontDescription, verse: &Verse) -> Size {
